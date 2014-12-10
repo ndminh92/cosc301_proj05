@@ -1,0 +1,30 @@
+Volume: COSC301
+IMG/ (directory)
+Number of dir entries are: 16 
+    WHITNEY.JPG (14800 bytes) (starting cluster 5)    a
+        Expected sectors occupied based on size: 29 
+        Actual number of clusters occupied is: 29
+    RANGELEY.JPG (181459 bytes) (starting cluster 34)    a
+        Expected sectors occupied based on size: 355 
+        Actual number of clusters occupied is: 355
+    GATESLET.PDF (368595 bytes) (starting cluster 419)    a
+        Expected sectors occupied based on size: 720 
+        Actual number of clusters occupied is: 720
+    BLUETHIN.MP3 (181250 bytes) (starting cluster 1139)    a
+        Expected sectors occupied based on size: 355 
+        Actual number of clusters occupied is: 354
+        ** Warning: Less data exists than expected **
+SRC/ (directory)
+Number of dir entries are: 16 
+    BOOTSECT.H (2641 bytes) (starting cluster 389)    a
+        Expected sectors occupied based on size: 6 
+        Actual number of clusters occupied is: 6
+    BPB.H (7486 bytes) (starting cluster 395)    a
+        Expected sectors occupied based on size: 15 
+        Actual number of clusters occupied is: 15
+    DOS.H (722 bytes) (starting cluster 410)    a
+        Expected sectors occupied based on size: 2 
+        Actual number of clusters occupied is: 2
+    FAT.H (3277 bytes) (starting cluster 412)    a
+        Expected sectors occupied based on size: 7 
+        Actual number of clusters occupied is: 7

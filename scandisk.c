@@ -24,9 +24,12 @@
 #define CLUSTER_DUPE (1 << 3)     // cluster points to already pointed cluster
 #define CLUSTER_DEAD (1 << 4)     // cluster points to an invalid cluster #
 #define CLUSTER_NULL (1 << 5)     // the file is empty
+#define CLUSTER_LESS (1 << 6)     // less cluster than expected
+#define CLUSTER_MORE (1 << 7)     // more cluster than expected
 
 int cluster_trace(uint16_t start_cluster, uint8_t *image_buf,
-                  struct bpb33 *bpb, uint8_t *cluster_info); 
+                  struct bpb33 *bpb, uint8_t *cluster_info,
+                  int indent, uint32_t num_of_cluster); 
 
 void usage(char *progname) {
     fprintf(stderr, "usage: %s <imagename>\n", progname);
@@ -113,25 +116,26 @@ uint16_t print_dirent(struct direntry *dirent, int indent,
          * a "regular" file entry
          * print attributes, size, starting cluster, etc.
          */
-	    int ro = (dirent->deAttributes & ATTR_READONLY) == ATTR_READONLY;
-	    int hidden = (dirent->deAttributes & ATTR_HIDDEN) == ATTR_HIDDEN;
-	    int sys = (dirent->deAttributes & ATTR_SYSTEM) == ATTR_SYSTEM;
-	    int arch = (dirent->deAttributes & ATTR_ARCHIVE) == ATTR_ARCHIVE;
+        int ro = (dirent->deAttributes & ATTR_READONLY) == ATTR_READONLY;
+        int hidden = (dirent->deAttributes & ATTR_HIDDEN) == ATTR_HIDDEN;
+        int sys = (dirent->deAttributes & ATTR_SYSTEM) == ATTR_SYSTEM;
+        int arch = (dirent->deAttributes & ATTR_ARCHIVE) == ATTR_ARCHIVE;
 
-	    size = getulong(dirent->deFileSize);
-	    print_indent(indent);
-	    printf("%s.%s (%u bytes) (starting cluster %d) %c%c%c%c\n", 
-	       name, extension, size, getushort(dirent->deStartCluster),
-	       ro?'r':' ', 
-               hidden?'h':' ', 
-               sys?'s':' ', 
-               arch?'a':' ');
-	    print_indent(indent+1);
+        size = getulong(dirent->deFileSize);
+        print_indent(indent);
+        printf("%s.%s (%u bytes) (starting cluster %d) %c%c%c%c\n", 
+           name, extension, size, getushort(dirent->deStartCluster),
+           ro?'r':' ', 
+           hidden?'h':' ', 
+           sys?'s':' ', 
+           arch?'a':' ');
+
+        print_indent(indent+1);
         printf("Expected sectors occupied based on size: %d \n", (size + 512 - 1)/512);
         // Go through the FAT chain of the file and mark cluster as being
         // pointer to. Done through the cluster_trace function
-	    print_indent(indent+1);
-        cluster_trace(getushort(dirent->deStartCluster), image_buf, bpb, cluster_info);
+        cluster_trace(getushort(dirent->deStartCluster), image_buf,
+                      bpb, cluster_info, indent+1, (size + 512 - 1)/512);
     }
 
     return followclust;
@@ -178,21 +182,30 @@ void test_FAT(uint8_t *image_buf, struct bpb33 *bpb) {
 // Trace the FAT chain starting from start_cluster
 // Mark the corresponding index in cluster_info as being pointed to
 int cluster_trace(uint16_t start_cluster, uint8_t *image_buf,
-                  struct bpb33 *bpb, uint8_t *cluster_info) {
+                  struct bpb33 *bpb, uint8_t *cluster_info,
+                  int indent, uint32_t num_of_cluster) {
     uint16_t cluster = start_cluster;
     int cluster_count = 0;  // Has at least one cluster for beginning
 
     uint8_t anomaly_flag = CLUSTER_ZEROMASK;
 
     if (cluster == 0) {
+        // The file is empty
         anomaly_flag |= CLUSTER_NULL;
     } else do {
         cluster_count ++;
+
         cluster_info[cluster] |= CLUSTER_POINTED;
 
         uint16_t next_cluster = get_fat_entry(cluster, image_buf, bpb);
 
         // Check and mark pointer flag
+        if (num_of_cluster > cluster_count && is_end_of_file(next_cluster)) {
+            // The file shouldn't end here
+            cluster_info[cluster] |= CLUSTER_LESS;
+            anomaly_flag |= CLUSTER_LESS;
+            break;
+        }
         if ( (!is_end_of_file(next_cluster)) && (!is_valid_cluster(next_cluster, bpb)) ) {
             // Points to invalid cluster
             cluster_info[cluster] |= CLUSTER_DEAD;
@@ -206,18 +219,34 @@ int cluster_trace(uint16_t start_cluster, uint8_t *image_buf,
             break;
         }
         cluster = next_cluster;
-    } while (!is_end_of_file(cluster)); 
+    } while (!is_end_of_file(cluster));
 
+    if (num_of_cluster < cluster_count) {
+        anomaly_flag |= CLUSTER_MORE;
+    }
+
+    print_indent(indent);
     printf("Actual number of clusters occupied is: %d\n", cluster_count);
 
     if ( anomaly_flag & CLUSTER_NULL ) {
-        printf("The file is empty\n");
+        print_indent(indent);
+        printf("** Warning: The file is empty **\n");
+    }
+    if ( anomaly_flag & CLUSTER_LESS ) {
+        print_indent(indent);
+        printf("** Warning: Less data exists than expected **\n");
+    }
+    if ( anomaly_flag & CLUSTER_MORE ) {
+        print_indent(indent);
+        printf("** Warning: More data exists than expected **\n");
     }
     if ( anomaly_flag & CLUSTER_DEAD ) {
-        printf("Invalid cluster end found: pointing to nonexistent cluster\n");
+        print_indent(indent);
+        printf("** Invalid cluster end found: pointing to nonexistent cluster **\n");
     }
     if ( anomaly_flag & CLUSTER_DUPE ) {
-        printf("Invalid cluster end found: duplicated pointing to cluster\n");
+        print_indent(indent);
+        printf("** Invalid cluster end found: duplicated pointing to cluster **\n");
     }
     return cluster_count;
 }
