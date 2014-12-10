@@ -15,14 +15,18 @@
 #include "dos.h"
 
 
-#define CLUSTER_ZEROMASK (0)
-#define CLUSTER_ALLMASK (255)
-#define CLUSTER_USED (1)
-#define CLUSTER_POINTED (1 << 1)
-#define CLUSTER_BAD (1 << 2)
-#define CLUSTER_MULTIPOINTED (1 << 3)
+// cluster flags
+#define CLUSTER_ZEROMASK (0)      // initial cluster flag
+#define CLUSTER_ALLMASK (255)     // full flag
+#define CLUSTER_USED (1)          // cluster is used
+#define CLUSTER_POINTED (1 << 1)  // cluster is pointed by another cluster
+#define CLUSTER_BAD (1 << 2)      // cluster is invalid
+#define CLUSTER_DUPE (1 << 3)     // cluster points to already pointed cluster
+#define CLUSTER_DEAD (1 << 4)     // cluster points to an invalid cluster #
+#define CLUSTER_NULL (1 << 5)     // the file is empty
 
-int cluster_trace(uint16_t start_cluster, uint8_t *image_buf, struct bpb33 *bpb, uint8_t *cluster_info); 
+int cluster_trace(uint16_t start_cluster, uint8_t *image_buf,
+                  struct bpb33 *bpb, uint8_t *cluster_info); 
 
 void usage(char *progname) {
     fprintf(stderr, "usage: %s <imagename>\n", progname);
@@ -40,7 +44,9 @@ void print_indent(int indent)
 }
 
 
-uint16_t print_dirent(struct direntry *dirent, int indent, uint16_t cluster, uint8_t *cluster_info, uint8_t *image_buf, struct bpb33 *bpb) {
+uint16_t print_dirent(struct direntry *dirent, int indent,
+                      uint16_t cluster, uint8_t *cluster_info,
+                      uint8_t *image_buf, struct bpb33 *bpb) {
     uint16_t followclust = 0;
 
     int i;
@@ -132,7 +138,8 @@ uint16_t print_dirent(struct direntry *dirent, int indent, uint16_t cluster, uin
 }
 
 void follow_dir(uint16_t cluster, int indent,
-		uint8_t *image_buf, struct bpb33* bpb, uint8_t *cluster_info) {
+		uint8_t *image_buf, struct bpb33* bpb,
+                uint8_t *cluster_info) {
     while (is_valid_cluster(cluster, bpb)) {
         struct direntry *dirent = (struct direntry*)cluster_to_addr(cluster, image_buf, bpb);
 
@@ -170,21 +177,48 @@ void test_FAT(uint8_t *image_buf, struct bpb33 *bpb) {
 
 // Trace the FAT chain starting from start_cluster
 // Mark the corresponding index in cluster_info as being pointed to
-int cluster_trace(uint16_t start_cluster, uint8_t *image_buf, struct bpb33 *bpb, uint8_t *cluster_info) {
+int cluster_trace(uint16_t start_cluster, uint8_t *image_buf,
+                  struct bpb33 *bpb, uint8_t *cluster_info) {
     uint16_t cluster = start_cluster;
     int cluster_count = 0;  // Has at least one cluster for beginning
-    do {
+
+    uint8_t anomaly_flag = CLUSTER_ZEROMASK;
+
+    if (cluster == 0) {
+        anomaly_flag |= CLUSTER_NULL;
+    } else do {
         cluster_count ++;
-        // Check and mark pointed flag
-        if ( (cluster_info[cluster]) & CLUSTER_POINTED ) {
-            (cluster_info[cluster]) |= CLUSTER_MULTIPOINTED; 
-        } else {
-            (cluster_info[cluster]) |= CLUSTER_POINTED; 
+        cluster_info[cluster] |= CLUSTER_POINTED;
+
+        uint16_t next_cluster = get_fat_entry(cluster, image_buf, bpb);
+
+        // Check and mark pointer flag
+        if ( (!is_end_of_file(next_cluster)) && (!is_valid_cluster(next_cluster, bpb)) ) {
+            // Points to invalid cluster
+            cluster_info[cluster] |= CLUSTER_DEAD;
+            anomaly_flag |= CLUSTER_DEAD;
+            break;
         }
-        cluster = get_fat_entry(cluster, image_buf, bpb);
+        if ( cluster_info[next_cluster] & CLUSTER_POINTED ) {
+            // Points to a previously pointed cluster
+            cluster_info[cluster] |= CLUSTER_DUPE;
+            anomaly_flag |= CLUSTER_DUPE;
+            break;
+        }
+        cluster = next_cluster;
     } while (!is_end_of_file(cluster)); 
 
-    printf("Total cluster occupied is: %d\n", cluster_count);
+    printf("Actual number of clusters occupied is: %d\n", cluster_count);
+
+    if ( anomaly_flag & CLUSTER_NULL ) {
+        printf("The file is empty\n");
+    }
+    if ( anomaly_flag & CLUSTER_DEAD ) {
+        printf("Invalid cluster end found: pointing to nonexistent cluster\n");
+    }
+    if ( anomaly_flag & CLUSTER_DUPE ) {
+        printf("Invalid cluster end found: duplicated pointing to cluster\n");
+    }
     return cluster_count;
 }
 
