@@ -147,7 +147,7 @@ void traverse_root(uint8_t *image_buf, struct bpb33* bpb)
     uint16_t cluster = 0;
 
     struct direntry *dirent = (struct direntry*)cluster_to_addr(cluster, image_buf, bpb);
-
+    printf("The address of the first dirent is: %lu\n", dirent);
     int i = 0;
     for ( ; i < bpb->bpbRootDirEnts; i++)
     {
@@ -179,6 +179,7 @@ int main(int argc, char** argv)
 
     image_buf = mmap_file(argv[1], &fd);
     bpb = check_bootsector(image_buf);
+    printf("Root directory address is: %lu\n", root_dir_addr(image_buf, bpb));
     traverse_root(image_buf, bpb);
 
     unmmap_file(image_buf, &fd);
