@@ -27,10 +27,17 @@
 #define CLUSTER_LESS (1 << 6)     // less cluster than expected
 #define CLUSTER_MORE (1 << 7)     // more cluster than expected
 
+struct corruption_info {
+    struct direntry *file;
+    uint8_t anomaly_flag;
+    struct corruption_info *next;
+};
+
 struct disk_info {
     uint8_t *image_buf;
     struct bpb33 *bpb;
     uint8_t *cluster_info;
+    struct corruption_info *corr_info;
 };
 
 int cluster_trace(uint16_t , struct disk_info *,
@@ -155,7 +162,16 @@ void follow_dir(uint16_t cluster, int indent, struct disk_info *disk_info) {
 
     while (is_valid_cluster(cluster, bpb)) {
         struct direntry *dirent = (struct direntry*)cluster_to_addr(cluster, image_buf, bpb);
-
+        
+        int numDirEntries = (bpb->bpbBytesPerSec * bpb->bpbSecPerClust) / sizeof(struct direntry);
+        printf("Number of dir entries are: %d \n", numDirEntries);
+        for (int i = 0 ; i < numDirEntries; i++) {
+            uint16_t followclust = print_dirent(dirent, indent, cluster, disk_info);
+            if (followclust) {
+                follow_dir(followclust, indent+1, disk_info);
+            }
+            dirent++;
+        }
 
 	cluster = get_fat_entry(cluster, image_buf, bpb);
     }
@@ -186,11 +202,13 @@ int cluster_trace(uint16_t start_cluster, struct disk_info *disk_info,
     uint8_t *image_buf = disk_info -> image_buf;
     uint8_t *cluster_info = disk_info -> cluster_info;
     struct bpb33 *bpb = disk_info -> bpb;
+
+    // Temporary fix. Will remove
+    uint8_t anomaly_flag = CLUSTER_ZEROMASK;
     
     uint16_t cluster = start_cluster;
     int cluster_count = 0;  // Has at least one cluster for beginning
 
-    uint8_t anomaly_flag = CLUSTER_ZEROMASK;
 
     if (cluster == 0) {
         // The file is empty
@@ -314,12 +332,21 @@ int main(int argc, char** argv) {
     disk_info.image_buf = image_buf;
     disk_info.bpb = bpb;
     disk_info.cluster_info = cluster_info;
+    disk_info.corr_info = NULL;
+    //disk_info.anomaly_flag = CLUSTER_ZEROMASK;
 
     check_free_cluster(&disk_info); 
     dos_ls(&disk_info);
 
     // Running validify cluster info
-    validify_cluster_info(cluster_info, bpb -> bpbSectors); 
+    validify_cluster_info(cluster_info, bpb -> bpbSectors);
+
+    // Print out results of scandsk
+    /*if (disk_info.anomaly_flag == CLUSTER_ZEROMASK) {
+        printf("scandsk complete. No error found.\n");
+    } else {
+        printf("scandsk complate. Error were found and fixed\n");
+    }*/
     unmmap_file(image_buf, &fd);
     return 0;
 }
