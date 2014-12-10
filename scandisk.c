@@ -27,9 +27,14 @@
 #define CLUSTER_LESS (1 << 6)     // less cluster than expected
 #define CLUSTER_MORE (1 << 7)     // more cluster than expected
 
-int cluster_trace(uint16_t start_cluster, uint8_t *image_buf,
-                  struct bpb33 *bpb, uint8_t *cluster_info,
-                  int indent, uint32_t num_of_cluster); 
+struct disk_info {
+    uint8_t *image_buf;
+    struct bpb33 *bpb;
+    uint8_t *cluster_info;
+};
+
+int cluster_trace(uint16_t , struct disk_info *,
+                  int, uint32_t); 
 
 void usage(char *progname) {
     fprintf(stderr, "usage: %s <imagename>\n", progname);
@@ -48,8 +53,11 @@ void print_indent(int indent)
 
 
 uint16_t print_dirent(struct direntry *dirent, int indent,
-                      uint16_t cluster, uint8_t *cluster_info,
-                      uint8_t *image_buf, struct bpb33 *bpb) {
+                      uint16_t cluster, struct disk_info *disk_info) {
+    uint8_t *cluster_info = disk_info -> cluster_info; 
+    uint8_t *image_buf = disk_info -> image_buf; 
+    struct bpb33 *bpb = disk_info -> bpb;
+
     uint16_t followclust = 0;
 
     int i;
@@ -134,28 +142,20 @@ uint16_t print_dirent(struct direntry *dirent, int indent,
         printf("Expected sectors occupied based on size: %d \n", (size + 512 - 1)/512);
         // Go through the FAT chain of the file and mark cluster as being
         // pointer to. Done through the cluster_trace function
-        cluster_trace(getushort(dirent->deStartCluster), image_buf,
-                      bpb, cluster_info, indent+1, (size + 512 - 1)/512);
+        cluster_trace(getushort(dirent->deStartCluster), disk_info, indent+1, (size + 512 - 1)/512);
     }
 
     return followclust;
 }
 
-void follow_dir(uint16_t cluster, int indent,
-		uint8_t *image_buf, struct bpb33* bpb,
-                uint8_t *cluster_info) {
+void follow_dir(uint16_t cluster, int indent, struct disk_info *disk_info) {
+    uint8_t *image_buf = disk_info -> image_buf; 
+    struct bpb33* bpb = disk_info -> bpb;
+    uint8_t *cluster_info = disk_info -> cluster_info;
+
     while (is_valid_cluster(cluster, bpb)) {
         struct direntry *dirent = (struct direntry*)cluster_to_addr(cluster, image_buf, bpb);
 
-        int numDirEntries = (bpb->bpbBytesPerSec * bpb->bpbSecPerClust) / sizeof(struct direntry);
-        printf("Number of dir entries are: %d \n", numDirEntries);
-	for (int i = 0 ; i < numDirEntries; i++)	{
-        uint16_t followclust = print_dirent(dirent, indent, cluster, cluster_info, image_buf, bpb);
-        if (followclust) {
-            follow_dir(followclust, indent+1, image_buf, bpb, cluster_info);
-        }
-        dirent++;
-	}
 
 	cluster = get_fat_entry(cluster, image_buf, bpb);
     }
@@ -163,27 +163,30 @@ void follow_dir(uint16_t cluster, int indent,
 
 // End of Prof Sommers code
 
-void dos_ls(uint8_t *image_buf, struct bpb33 *bpb, uint8_t *cluster_info) {
+void dos_ls(struct disk_info *disk_info) {
+    uint8_t *image_buf = disk_info -> image_buf; 
+    struct bpb33 *bpb = disk_info -> bpb; 
+    uint8_t *cluster_info = disk_info -> cluster_info;
+
     struct direntry *dirent = (struct direntry *)  root_dir_addr(image_buf, bpb);
     for (int i = 0; i < bpb -> bpbRootDirEnts; i++) {
         // 19 is the cluster number of the root dir
-        uint16_t followclust = print_dirent(dirent, 0, 19, cluster_info, image_buf, bpb);
+        uint16_t followclust = print_dirent(dirent, 0, 19, disk_info);
         if (is_valid_cluster(followclust, bpb)) {
-            follow_dir(followclust, 1, image_buf, bpb, cluster_info);
+            follow_dir(followclust, 1, disk_info);
         }
         dirent++;
     }
 }
 
-void test_FAT(uint8_t *image_buf, struct bpb33 *bpb) {
-
-}
-
 // Trace the FAT chain starting from start_cluster
 // Mark the corresponding index in cluster_info as being pointed to
-int cluster_trace(uint16_t start_cluster, uint8_t *image_buf,
-                  struct bpb33 *bpb, uint8_t *cluster_info,
-                  int indent, uint32_t num_of_cluster) {
+int cluster_trace(uint16_t start_cluster, struct disk_info *disk_info,
+                                 int indent, uint32_t num_of_cluster) {
+    uint8_t *image_buf = disk_info -> image_buf;
+    uint8_t *cluster_info = disk_info -> cluster_info;
+    struct bpb33 *bpb = disk_info -> bpb;
+    
     uint16_t cluster = start_cluster;
     int cluster_count = 0;  // Has at least one cluster for beginning
 
@@ -251,7 +254,10 @@ int cluster_trace(uint16_t start_cluster, uint8_t *image_buf,
     return cluster_count;
 }
 
-void check_free_cluster(uint8_t *cluster_info, uint8_t *image_buf, struct bpb33 *bpb) {
+void check_free_cluster(struct disk_info *disk_info) {
+    uint8_t *cluster_info = disk_info -> cluster_info;
+    uint8_t *image_buf = disk_info -> image_buf;
+    struct bpb33 *bpb = disk_info -> bpb;
     // Assumes cluster_info is clean and pristine
     uint16_t cluster = 0;
     for (int i = 2; i < bpb -> bpbSectors; i++) {
@@ -302,18 +308,15 @@ int main(int argc, char** argv) {
     for (int i = 0; i < num_cluster; i++) {
         cluster_info[i] = CLUSTER_ZEROMASK;
     }
+    
+    // Putting the general info together in one struct
+    struct disk_info disk_info;
+    disk_info.image_buf = image_buf;
+    disk_info.bpb = bpb;
+    disk_info.cluster_info = cluster_info;
 
-    check_free_cluster(cluster_info, image_buf, bpb); 
-    dos_ls(image_buf, bpb, cluster_info);
-    int free_count = 1;
-    for (int i = 2; i < num_cluster; i++) {
-        uint16_t cluster = get_fat_entry(i, image_buf, bpb);
-        cluster = cluster & FAT12_MASK;
-        if (cluster == CLUST_FREE) {
-            //printf("We have a free cluster at %d \n", i);
-            free_count ++;
-        }
-    }
+    check_free_cluster(&disk_info); 
+    dos_ls(&disk_info);
 
     // Running validify cluster info
     validify_cluster_info(cluster_info, bpb -> bpbSectors); 
