@@ -183,7 +183,7 @@ uint16_t print_dirent(struct direntry *dirent, int indent,
         printf("%s.%s (%u bytes) (starting cluster %d)\n", 
            name, extension, size, getushort(dirent->deStartCluster));
        
-        uint16_t sectorSize= bpb -> bpbBytesPerSec;
+        uint16_t sectorSize = bpb -> bpbBytesPerSec;
         uint32_t expected_cluster_num = (size + sectorSize - 1) / sectorSize;
         print_indent(indent+1);
         printf("Expected sectors occupied based on size: %d \n", expected_cluster_num);
@@ -319,16 +319,13 @@ struct corruption_info *cluster_trace(struct direntry *dirent, struct disk_info 
     } 
 
     struct corruption_info *new_info = NULL;
-    /*
     if ((anomaly_flag & (CLUSTER_ALLMASK ^ CLUSTER_NULL)) != CLUSTER_ZEROMASK) {
         new_info = malloc(sizeof(struct corruption_info));
         new_info -> file = dirent;
         new_info -> next = NULL;
         new_info -> anomaly_flag = anomaly_flag;
-
         add_corr_entry(disk_info, new_info);
     }
-*/
     return new_info;
 }
 
@@ -340,6 +337,10 @@ void check_free_cluster(struct disk_info *disk_info) {
     uint16_t cluster = 0;
     for (int i = 2; i < bpb -> bpbSectors; i++) {
         cluster = get_fat_entry(i, image_buf, bpb);
+        if (cluster == (FAT12_MASK & CLUST_BAD)) {
+            cluster_info[i] |= CLUSTER_BAD;
+        }
+
         if (cluster != CLUST_FREE) {
         // Check for free cluster            
             (cluster_info[i]) |= CLUSTER_USED;
@@ -353,13 +354,13 @@ void validify_cluster_info(uint8_t *cluster_info, int size) {
     // or not pointed to but used
     for (int i = 2; i < size; i++) {
         uint8_t value = cluster_info[i];
-        /*
         if (value & CLUSTER_BAD) {
-            printf("Cluster %d is marked as a bad cluster\n", i);
-            if (value & CLUSTER_USED) {
+            if (value & CLUSTER_POINTED) {
                 printf("Cluster %d is pointed to but is a bad cluster\n", i);
+            } else {
+                printf("Cluster %d is an orphaned bad cluster\n", i);
             }
-        }*/
+        }
         if (value & CLUSTER_POINTED) {
             if (!(value & CLUSTER_USED)) {
                 printf("Cluster %d is free but pointed to.\n", i);
@@ -376,19 +377,80 @@ void validify_cluster_info(uint8_t *cluster_info, int size) {
 void fix_corruption(struct disk_info *disk_info) {
     // Print list of FAT entries error 
     validify_cluster_info(disk_info -> cluster_info, disk_info -> bpb -> bpbSectors);
+    
+    uint8_t *image_buf = disk_info -> image_buf;
+    struct bpb33 *bpb = disk_info -> bpb;
 
+    char fullname[15];
     // Print files error
     struct corruption_info *info = disk_info -> corr_info;
     while (info != NULL) {
-        char fullname[12];
         get_file_name(info -> file, fullname);
         printf("File inconsistency: %s \n", fullname);
+        info = info -> next;
+    }
+    printf("==========\n");
+    printf("End of error messages\n");
+
+    // Fixing the errors
+    info = disk_info -> corr_info;
+    while (info != NULL) {
+        struct direntry *dirent = info -> file;
+        uint32_t size = getulong(dirent->deFileSize);
+        uint16_t clusterSize = bpb -> bpbBytesPerSec * bpb -> bpbSecPerClust ;
+        uint32_t expected_cluster_num = (size + clusterSize - 1) / clusterSize;
+        uint16_t start_cluster = getushort(dirent->deStartCluster);
+        get_file_name(info -> file, fullname);
+
+
+        // More cluster in FAT chain than file size
+        if ((info -> anomaly_flag) & CLUSTER_MORE) {
+            printf("Fixing %s : more cluster in FAT chain than file size indicate. Trimming\n", fullname);
+            uint16_t cluster = start_cluster;
+            uint32_t cluster_count = 1;
+            while (cluster_count < expected_cluster_num) {
+                cluster = get_fat_entry(cluster, image_buf, bpb);
+                cluster_count++;
+            }
+            uint16_t next_cluster = get_fat_entry(cluster, image_buf, bpb);
+            set_fat_entry(cluster, CLUST_EOFS & FAT12_MASK, disk_info -> image_buf, disk_info -> bpb);
+            cluster = next_cluster;
+            while (!is_end_of_file(cluster)) {
+                if (cluster == (CLUST_BAD & FAT12_MASK)) {
+                    break;
+                }
+                next_cluster = get_fat_entry(cluster, image_buf, bpb);
+                set_fat_entry(cluster, CLUST_FREE & FAT12_MASK, disk_info -> image_buf, disk_info -> bpb);
+                cluster = next_cluster;
+            } 
+            if (cluster != (CLUST_BAD & FAT12_MASK)) {
+                set_fat_entry(cluster, CLUST_FREE & FAT12_MASK, disk_info -> image_buf, disk_info -> bpb);
+            }
+        }
+
+        // Less cluster in FAT chain than file size
+        // We change the file size to match the FAT chain
+        if ((info -> anomaly_flag) & CLUSTER_LESS) {
+            printf("Fixing %s : less cluster in FAT chain than file size indicate. Trimming\n", fullname);
+            uint16_t cluster = start_cluster;
+            uint32_t cluster_count = 0;
+            while (!is_end_of_file(cluster)) {
+                cluster_count++;
+                cluster = get_fat_entry(cluster, image_buf, bpb);
+            }
+            size = cluster_count * clusterSize;
+            printf("Cluster count is :%d\n", cluster_count);
+            putulong(dirent -> deFileSize, size);
+        }
+
+        // 
+
+
 
         info = info -> next;
     }
-    printf("Printing of error completes\n");
 
-    // Freeing the malloc
+    // Freeing memory used for corruption info
     info = disk_info -> corr_info;
     struct corruption_info *next = NULL;
     while (info != NULL) {
@@ -429,11 +491,12 @@ int main(int argc, char** argv) {
     check_free_cluster(&disk_info); 
     dos_ls(&disk_info);
     
-
     printf("==================\n");
     printf("Scanning complete\n");
 
     fix_corruption(&disk_info);
+
     unmmap_file(image_buf, &fd);
+    free(bpb);
     return 0;
 }
