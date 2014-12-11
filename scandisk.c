@@ -268,17 +268,24 @@ struct corruption_info *cluster_trace(struct direntry *dirent, struct disk_info 
             anomaly_flag |= CLUSTER_LESS;
             break;
         }
-        if ( (!is_end_of_file(next_cluster)) && (!is_valid_cluster(next_cluster, bpb)) ) {
-            // Points to invalid cluster
-            cluster_info[cluster] |= CLUSTER_DEAD;
-            anomaly_flag |= CLUSTER_DEAD;
-            break;
-        }
-        if ( cluster_info[next_cluster] & CLUSTER_POINTED ) {
-            // Points to a previously pointed cluster
-            cluster_info[cluster] |= CLUSTER_DUPE;
-            anomaly_flag |= CLUSTER_DUPE;
-            break;
+        if (!is_end_of_file(next_cluster)) {
+            if (!is_valid_cluster(next_cluster, bpb))  {
+                // Points to invalid cluster
+                cluster_info[cluster] |= CLUSTER_DEAD;
+                anomaly_flag |= CLUSTER_DEAD;
+                break;
+            }
+            /* The previous logic suddenly stopped working because
+             * it did not stop at the end of the file, and thus
+             * the end of the file cluster (filled with garbage)
+             * resulted in GIGO situation with anomaly_flag
+             */
+            if ( (cluster_info[next_cluster] & CLUSTER_POINTED ) ) {
+                // Points to a previously pointed cluster
+                cluster_info[cluster] |= CLUSTER_DUPE;
+                anomaly_flag |= CLUSTER_DUPE;
+                break;
+            }
         }
         cluster = next_cluster;
     } while (!is_end_of_file(cluster));
