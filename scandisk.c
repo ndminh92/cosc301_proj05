@@ -312,6 +312,7 @@ struct corruption_info *cluster_trace(struct direntry *dirent, struct disk_info 
     } 
 
     struct corruption_info *new_info = NULL;
+    /*
     if ((anomaly_flag & (CLUSTER_ALLMASK ^ CLUSTER_NULL)) != CLUSTER_ZEROMASK) {
         new_info = malloc(sizeof(struct corruption_info));
         new_info -> file = dirent;
@@ -320,7 +321,7 @@ struct corruption_info *cluster_trace(struct direntry *dirent, struct disk_info 
 
         add_corr_entry(disk_info, new_info);
     }
-
+*/
     return new_info;
 }
 
@@ -334,7 +335,7 @@ void check_free_cluster(struct disk_info *disk_info) {
         cluster = get_fat_entry(i, image_buf, bpb);
         if (cluster != CLUST_FREE) {
         // Check for free cluster            
-            cluster_info[i] |= CLUSTER_USED;
+            (cluster_info[i]) |= CLUSTER_USED;
         }
     }
 
@@ -345,12 +346,13 @@ void validify_cluster_info(uint8_t *cluster_info, int size) {
     // or not pointed to but used
     for (int i = 2; i < size; i++) {
         uint8_t value = cluster_info[i];
+        /*
         if (value & CLUSTER_BAD) {
             printf("Cluster %d is marked as a bad cluster\n", i);
             if (value & CLUSTER_USED) {
                 printf("Cluster %d is pointed to but is a bad cluster\n", i);
             }
-        }
+        }*/
         if (value & CLUSTER_POINTED) {
             if (!(value & CLUSTER_USED)) {
                 printf("Cluster %d is free but pointed to.\n", i);
