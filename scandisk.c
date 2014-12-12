@@ -47,9 +47,14 @@ struct disk_info {
 
 char toupper(char);
 
-struct corruption_info *cluster_trace(struct direntry *, struct disk_info *,
-                  int, uint32_t); 
+struct corruption_info *cluster_trace(struct direntry *,
+                                      struct disk_info *,
+                                      int); 
 
+
+/*
+ * add corruption entry to the linked list
+ */
 void add_corr_entry(struct disk_info *disk_info, struct corruption_info *info) {
     struct corruption_info *last = disk_info -> corr_info;
     if (last == NULL) {
@@ -203,6 +208,10 @@ void print_indent(int indent)
 	printf(" ");
 }
 
+/*
+ * end of Prof Sommers' code
+ */
+
 
 uint16_t print_dirent(struct direntry *dirent, int indent,
                       uint16_t cluster, struct disk_info *disk_info) {
@@ -220,6 +229,7 @@ uint16_t print_dirent(struct direntry *dirent, int indent,
     extension[3] = ' ';
     memcpy(name, &(dirent->deName[0]), 8);
     memcpy(extension, dirent->deExtension, 3);
+
     if (name[0] == SLOT_EMPTY) {
 	return followclust;
     }
@@ -247,8 +257,7 @@ uint16_t print_dirent(struct direntry *dirent, int indent,
     for (i = 3; i > 0; i--)  {
 	if (extension[i] == ' ') 
 	    extension[i] = '\0';
-	else 
-	    break;
+	else break;
     }
 
     if ((dirent->deAttributes & ATTR_WIN95LFN) == ATTR_WIN95LFN) {
@@ -281,13 +290,13 @@ uint16_t print_dirent(struct direntry *dirent, int indent,
         printf("%s.%s (%u bytes) (starting cluster %d)\n", 
            name, extension, size, getushort(dirent->deStartCluster));
        
-        uint16_t sectorSize = bpb -> bpbBytesPerSec;
-        uint32_t expected_cluster_num = (size + sectorSize - 1) / sectorSize;
+
+        
 
    
         // Go through the FAT chain of the file and mark cluster as being
         // pointer to. Done through the cluster_trace function
-        cluster_trace(dirent, disk_info, indent+1, expected_cluster_num);
+        cluster_trace(dirent, disk_info, indent+1);
 
     }
 
@@ -317,7 +326,7 @@ void follow_dir(uint16_t cluster, int indent, struct disk_info *disk_info) {
 
 // End of Prof Sommers code
 
-void dos_ls(struct disk_info *disk_info) {
+void traverse_dirent(struct disk_info *disk_info) {
     uint8_t *image_buf = disk_info -> image_buf; 
     struct bpb33 *bpb = disk_info -> bpb; 
 
@@ -361,14 +370,20 @@ void print_anomaly_error(uint8_t anomaly_flag, int indent) {
 // Trace the FAT chain starting from start_cluster
 // Mark the corresponding index in cluster_info as being pointed to
 // Return the total number of cluster in the chain
-struct corruption_info *cluster_trace(struct direntry *dirent, struct disk_info *disk_info, int indent, uint32_t num_of_cluster) {
+struct corruption_info *cluster_trace(struct direntry *dirent,
+                                      struct disk_info *disk_info,
+                                      int indent) {
     uint8_t *image_buf = disk_info -> image_buf;
     uint8_t *cluster_info = disk_info -> cluster_info;
     struct bpb33 *bpb = disk_info -> bpb;
-    uint16_t cluster = getushort(dirent->deStartCluster);
+    
+    uint32_t size = getulong(dirent->deFileSize);
+    uint16_t sectorSize = bpb -> bpbBytesPerSec;
+    uint32_t num_of_cluster = (size + sectorSize - 1) / sectorSize;
 
     uint8_t anomaly_flag = CLUSTER_ZEROMASK;
     
+    uint16_t cluster = getushort(dirent->deStartCluster);
     uint32_t cluster_count = 0;
 
 
@@ -449,26 +464,60 @@ void check_free_cluster(struct disk_info *disk_info) {
     }
 }
 
+
+int data_is_inconsistent(struct disk_info *disk_info) {
+    struct bpb33 *bpb = disk_info -> bpb;
+    uint8_t *cluster_info = disk_info -> cluster_info;
+    int has_error = 0;
+     
+    check_free_cluster(disk_info); 
+    traverse_dirent(disk_info);
+    has_error = validify_cluster_info(cluster_info, bpb);
+
+    char fullname[15];
+    // Print files error
+    struct corruption_info *info = disk_info -> corr_info;
+    if (info != NULL) {
+        has_error = 1;
+    }
+    while (info != NULL) {
+        get_file_name(info -> file, fullname);
+        printf("File inconsistency: %s \n", fullname);
+        info = info -> next;
+    }
+
+    printf("==========\n");
+    printf("End of error messages\n");
+
+    return has_error;
+}
+
+
 /*
  * Check consistency between "pointed" and "used" flag
  */
-void validify_cluster_info(uint8_t *cluster_info, struct bpb33 *bpb) {
+int validify_cluster_info(uint8_t *cluster_info, struct bpb33 *bpb) {
+    int has_error = 0;
     int size = bpb -> bpbSectors;
     for (int i = 2; i < size; i++) {
         uint8_t value = cluster_info[i];
         if (value & CLUSTER_POINTED) {
             if (value & CLUSTER_BAD) {
                 printf("Cluster %d is pointed to but is a bad cluster\n", i);
+                has_error = 1;
             } else if (!(value & CLUSTER_USED)) {
                 printf("Cluster %d is free but pointed to.\n", i);
+                has_error = 1;
             }
         }
         if ((value & CLUSTER_USED) &&
             (!(value & CLUSTER_BAD)) &&
             (!(value & CLUSTER_POINTED))) {
             printf("Cluster %d is used but not pointed to.\n", i);
+            has_error = 1;
         }
     }
+    return has_error;
 }
 
 void print_diag_message(char *filename, char *error, char *fix) {
@@ -480,24 +529,13 @@ void print_diag_message(char *filename, char *error, char *fix) {
 }
 
 void fix_corruption(struct disk_info *disk_info) {
-    // Print list of FAT entries error 
-    validify_cluster_info(disk_info -> cluster_info, disk_info -> bpb);
-    
     uint8_t *image_buf = disk_info -> image_buf;
     struct bpb33 *bpb = disk_info -> bpb;
     uint8_t *cluster_info = disk_info -> cluster_info;
     uint16_t clusterSize = bpb -> bpbBytesPerSec * bpb -> bpbSecPerClust ;
+    struct corruption_info *info = disk_info -> corr_info;
     
     char fullname[15];
-    // Print files error
-    struct corruption_info *info = disk_info -> corr_info;
-    while (info != NULL) {
-        get_file_name(info -> file, fullname);
-        printf("File inconsistency: %s \n", fullname);
-        info = info -> next;
-    }
-    printf("==========\n");
-    printf("End of error messages\n");
 
     // Fixing the errors
     info = disk_info -> corr_info;
@@ -707,15 +745,13 @@ int main(int argc, char** argv) {
     disk_info.cluster_info = cluster_info;
     disk_info.corr_info = NULL;
 
-    check_free_cluster(&disk_info); 
-    dos_ls(&disk_info);
-    
     printf("==================\n");
-    printf("Scanning complete\n");
    
-
-    fix_corruption(&disk_info);
-    
+    if (data_is_inconsistent(&disk_info)) {
+        fix_corruption(&disk_info);
+    } else {
+        printf("Yay we are free of error!\n");
+    }
 
     unmmap_file(image_buf, &fd);
     free(bpb);
